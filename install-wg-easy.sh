@@ -1,10 +1,6 @@
 #!/bin/bash
-# WG-Easy 一键部署脚本，支持全自动模式（环境变量） / 交互式
-# Usage:
-# 【交互模式】bash install-wg-easy.sh
-# 【全自动模式】
-# WG_HOST=45.154.14.62 WG_WEB_PORT=32083 WG_PASSWORD="MyPass123" bash install-wg-easy.sh
-
+# WG-Easy 一键部署脚本，支持【交互式】和【全自动无交互部署】
+# 全自动模式：外部预先生成 WG_PASSWORD_HASH 传入，解决bcrypt $转义问题
 set -euo pipefail
 
 REQUIRED_KERNEL="5.6"
@@ -31,7 +27,6 @@ check_dep() {
     fi
 }
 
-# 自动安装 docker（全自动最关键：没有docker就自动装）
 install_docker() {
     if ! command -v docker &>/dev/null; then
         echo -e "${GREEN}[INFO] 检测不到Docker，自动安装Docker${NC}"
@@ -55,15 +50,15 @@ fi
 check_dep curl
 install_docker
 
-# -------------------------- 自动模式判断：环境变量是否存在 --------------------------
+# -------------------------- 自动模式判断 --------------------------
 AUTO_MODE=0
-if [[ -n "${WG_HOST:-}" && -n "${WG_PASSWORD:-}" && -n "${WG_WEB_PORT:-}" ]]; then
+if [[ -n "${WG_HOST:-}" && -n "${WG_WEB_PORT:-}" && -n "${WG_PASSWORD_HASH:-}" ]]; then
     AUTO_MODE=1
     ipv4="$WG_HOST"
     TCP_PORT="$WG_WEB_PORT"
-    PASSWORD="$WG_PASSWORD"
+    PASSWORD_HASH="$WG_PASSWORD_HASH"
 else
-    # ===== 交互模式（原来的逻辑）=====
+    # ===== 交互模式 =====
     read -p "是否自动获取公网IPv4？（y/n）" use_auto_ip
     if [[ "$use_auto_ip" =~ ^[Yy]$ ]]; then
         echo "[INFO] 获取公网IP..."
@@ -88,16 +83,13 @@ else
         echo -e "${RED}[ERROR] 密码不能为空${NC}"
         exit 1
     fi
-
+    PASSWORD_HASH=$(docker run --rm ghcr.io/wg-easy/wg-easy wgpw "$PASSWORD")
     read -p "管理后台TCP端口: " TCP_PORT
     if [[ -z "$TCP_PORT" ]]; then
         echo -e "${RED}[ERROR] 端口不能为空${NC}"
         exit 1
     fi
 fi
-
-# 生成密码hash
-PASSWORD_HASH=$(docker run --rm ghcr.io/wg-easy/wg-easy wgpw "$PASSWORD")
 
 # 汇总
 echo -e "\n==================== 配置汇总 ===================="
