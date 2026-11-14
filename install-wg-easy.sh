@@ -2,7 +2,6 @@
 # WG-Easy host模式一键部署脚本，自动获取公网IP，端口可自定义
 set -euo pipefail
 
-REQUIRED_KERNEL="5.6"
 WG_DEFAULT_ADDRESS="10.0.9.x"
 WG_DEFAULT_DNS="168.126.63.1,8.8.8.8"
 WG_ALLOWED_IPS="0.0.0.0/0"
@@ -13,15 +12,6 @@ VOLUME_PATH="$HOME/.wg-easy"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
-
-# 内核检测
-kernel_ver=$(uname -r | cut -d. -f1,2)
-if awk -v k="$kernel_ver" -v t="$REQUIRED_KERNEL" 'BEGIN{if(k<t)exit 1;else exit 0}';then
-    echo -e "${GREEN}[OK] 内核 $kernel_ver ✔${NC}"
-else
-    echo -e "${RED}[ERROR] 内核版本过低，最低需要 ${REQUIRED_KERNEL}${NC}"
-    exit 1
-fi
 
 # 安装依赖
 check_dep(){
