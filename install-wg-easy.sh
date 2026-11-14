@@ -1,13 +1,12 @@
 #!/bin/bash
-#
-# WG-Easy Install Script
-# Source: https://github.com/你的用户名/你的仓库名
-# Usage: bash install-wg-easy.sh
-#
+# WG-Easy 一键部署脚本，支持全自动模式（环境变量） / 交互式
+# Usage:
+# 【交互模式】bash install-wg-easy.sh
+# 【全自动模式】
+# WG_HOST=45.154.14.62 WG_WEB_PORT=32083 WG_PASSWORD="MyPass123" bash install-wg-easy.sh
 
 set -euo pipefail
 
-# -------------------------- 配置常量 --------------------------
 REQUIRED_KERNEL="5.6"
 WG_DEFAULT_PORT=51820
 WG_DEFAULT_CIDR="10.0.8.x"
@@ -17,94 +16,116 @@ WG_PERSISTENT_KEEPALIVE=25
 CONTAINER_NAME="wg-easy"
 VOLUME_PATH="$HOME/.wg-easy"
 
-# -------------------------- 颜色定义 --------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-# -------------------------- 函数：版本比较 --------------------------
 version_ge() {
-    # $1 >= $2 返回0
     printf '%s\n' "$1" "$2" | sort -V | head -n1 | grep -q "^$2"
 }
 
-# -------------------------- 前置依赖检查 --------------------------
 check_dep() {
     if ! command -v "$1" &>/dev/null; then
-        echo -e "${RED}[ERROR] $1 未安装，请先安装 $1${NC}"
-        exit 1
+        echo -e "${RED}[ERROR] $1 未安装，正在安装...${NC}"
+        apt update && apt install -y "$1"
     fi
 }
 
-check_dep curl
-check_dep docker
+# 自动安装 docker（全自动最关键：没有docker就自动装）
+install_docker() {
+    if ! command -v docker &>/dev/null; then
+        echo -e "${GREEN}[INFO] 检测不到Docker，自动安装Docker${NC}"
+        curl -fsSL https://get.docker.com -o get-docker.sh
+        sh get-docker.sh
+        systemctl enable --now docker
+        usermod -aG docker "$USER"
+        sleep 2
+    fi
+}
 
-# -------------------------- 内核版本校验 --------------------------
+# 内核检查
 kernel_version=$(uname -r)
 if version_ge "$kernel_version" "$REQUIRED_KERNEL"; then
-    echo -e "${GREEN}[OK] 当前内核版本: $kernel_version (≥$REQUIRED_KERNEL)${NC}"
+    echo -e "${GREEN}[OK] 内核 $kernel_version ✔${NC}"
 else
-    echo -e "${RED}[ERROR] 当前内核版本: $kernel_version，最低要求 $REQUIRED_KERNEL${NC}"
+    echo -e "${RED}[ERROR] 内核 $kernel_version，最低要求 $REQUIRED_KERNEL${NC}"
     exit 1
 fi
 
-# -------------------------- 公网IP获取 --------------------------
-read -p "是否自动获取公网IPv4？（y/n）" use_auto_ip
-if [[ "$use_auto_ip" =~ ^[Yy]$ ]]; then
-    echo "[INFO] 正在获取公网IP..."
-    ipv4=$(curl -s --connect-timeout 5 https://ipv4.icanhazip.com | tr -d '\n')
-    if [[ -z "$ipv4" ]]; then
-        echo -e "${RED}[ERROR] 获取公网IP失败，请手动输入${NC}"
-        read -p "请输入IPv4地址或者域名: " ipv4
-    else
-        echo "获取到IP: $ipv4"
-        read -p "是否使用该IP？（y/n）" use_auto_ip_result
-        if [[ "$use_auto_ip_result" =~ ^[Nn]$ ]]; then
-            read -p "请输入IPv4地址或者域名: " ipv4
+check_dep curl
+install_docker
+
+# -------------------------- 自动模式判断：环境变量是否存在 --------------------------
+AUTO_MODE=0
+if [[ -n "${WG_HOST:-}" && -n "${WG_PASSWORD:-}" && -n "${WG_WEB_PORT:-}" ]]; then
+    AUTO_MODE=1
+    ipv4="$WG_HOST"
+    TCP_PORT="$WG_WEB_PORT"
+    PASSWORD="$WG_PASSWORD"
+else
+    # ===== 交互模式（原来的逻辑）=====
+    read -p "是否自动获取公网IPv4？（y/n）" use_auto_ip
+    if [[ "$use_auto_ip" =~ ^[Yy]$ ]]; then
+        echo "[INFO] 获取公网IP..."
+        ipv4=$(curl -s --connect-timeout 5 https://ipv4.icanhazip.com | tr -d '\n')
+        if [[ -z "$ipv4" ]]; then
+            echo -e "${RED}[ERROR] 获取IP失败，请手动输入${NC}"
+            read -p "IPv4/域名: " ipv4
+        else
+            echo "获取IP: $ipv4"
+            read -p "使用该IP？(y/n)" use_auto_ip_result
+            if [[ "$use_auto_ip_result" =~ ^[Nn]$ ]]; then
+                read -p "IPv4/域名: " ipv4
+            fi
         fi
+    else
+        read -p "IPv4或者域名: " ipv4
     fi
-else
-    read -p "请输入IPv4地址或者域名: " ipv4
+
+    read -p "管理后台密码: " -s PASSWORD
+    echo
+    if [[ -z "$PASSWORD" ]]; then
+        echo -e "${RED}[ERROR] 密码不能为空${NC}"
+        exit 1
+    fi
+
+    read -p "管理后台TCP端口: " TCP_PORT
+    if [[ -z "$TCP_PORT" ]]; then
+        echo -e "${RED}[ERROR] 端口不能为空${NC}"
+        exit 1
+    fi
 fi
 
-# -------------------------- 面板密码，自动生成PASSWORD_HASH --------------------------
-read -p "请输入管理后台密码: " -s PASSWORD
-echo
-if [[ -z "$PASSWORD" ]]; then
-    echo -e "${RED}[ERROR] 密码不能为空${NC}"
-    exit 1
-fi
-# 用docker内wg-easy自带工具生成bcrypt hash
+# 生成密码hash
 PASSWORD_HASH=$(docker run --rm ghcr.io/wg-easy/wg-easy wgpw "$PASSWORD")
 
-# -------------------------- Web面板端口 --------------------------
-read -p "请输入管理后台访问端口(TCP): " TCP_PORT
-if [[ -z "$TCP_PORT" ]]; then
-    echo -e "${RED}[ERROR] 面板端口不能为空${NC}"
-    exit 1
-fi
-
-# -------------------------- 汇总确认 --------------------------
+# 汇总
 echo -e "\n==================== 配置汇总 ===================="
 echo "WG_HOST:        $ipv4"
 echo "WireGuard端口:  $WG_DEFAULT_PORT/udp"
 echo "Web面板端口:    $TCP_PORT/tcp"
 echo "WG地址段:       $WG_DEFAULT_CIDR"
 echo "=================================================="
-read -p "确认继续部署？(y/n)" answer
-if [[ ! "$answer" =~ ^[Yy]$ ]]; then
-    echo "退出脚本"
-    exit 0
+
+# 自动模式跳过确认；交互模式需要确认
+if [[ $AUTO_MODE -eq 0 ]]; then
+    read -p "确认继续部署？(y/n)" answer
+    if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+        echo "退出"
+        exit 0
+    fi
+else
+    echo "[AUTO MODE] 全自动部署，跳过确认"
 fi
 
-# -------------------------- 容器存在则清理旧容器 --------------------------
+# 删除旧容器
 if docker ps -a --filter "name=^/${CONTAINER_NAME}$" | grep -q "$CONTAINER_NAME"; then
-    echo "[INFO] 发现旧容器 $CONTAINER_NAME，正在删除..."
+    echo "[INFO] 删除旧容器 $CONTAINER_NAME"
     docker rm -f "$CONTAINER_NAME"
 fi
 
-# -------------------------- 启动 wg-easy --------------------------
-echo "[INFO] 启动 wg-easy 容器..."
+# 启动容器
+echo "[INFO] 启动 wg-easy"
 docker run -d \
   --name="$CONTAINER_NAME" \
   -e WG_HOST="$ipv4" \
@@ -124,16 +145,12 @@ docker run -d \
   ghcr.io/wg-easy/wg-easy
 
 if [ $? -ne 0 ]; then
-    echo -e "${RED}[ERROR] 容器启动失败！${NC}"
+    echo -e "${RED}[ERROR] 容器启动失败${NC}"
     exit 1
 fi
 
-# -------------------------- 输出信息 --------------------------
-echo -e "\n${GREEN}[SUCCESS] WG-Easy 部署完成！${NC}"
-echo "----------------------------------------"
-echo "👉 管理面板地址：http://$ipv4:$TCP_PORT"
-echo "👉 WireGuard 端口：$WG_DEFAULT_PORT/udp"
-echo "👉 数据持久化目录：$VOLUME_PATH"
-echo "⚠️  记得在云服务商安全组/防火墙放行："
-echo "    $WG_DEFAULT_PORT/udp  和  $TCP_PORT/tcp"
-echo "----------------------------------------"
+echo -e "\n${GREEN}[SUCCESS] 部署完成！${NC}"
+echo "👉 面板地址：http://$ipv4:$TCP_PORT"
+echo "👉 WireGuard：$WG_DEFAULT_PORT/udp"
+echo "👉 数据目录：$VOLUME_PATH"
+echo "⚠️  放行安全组：$WG_DEFAULT_PORT/udp 、$TCP_PORT/tcp"
