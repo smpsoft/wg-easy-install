@@ -1,10 +1,12 @@
-# 先安装git
-apt install git -y
-# 克隆仓库，替换成你自己仓库地址
-git clone https://github.com/smpsoft/wg-easy-install.git
-cd wg-easy-install
-# 把脚本放进这个文件夹
-cp /root/install-wg-easy.sh ./
-git add .
-git commit -m "add install script"
-git push
+# wg-easy-install
+wg-easy 一键部署脚本，支持【交互式】和【全自动无交互部署】
+
+### 全自动部署（推荐批量）
+```bash
+WG_HOST=45.154.14.xx WG_WEB_PORT=32083 WG_PASSWORD="MyPass123" curl -sL https://raw.githubusercontent.com/smpsoft/wg-easy-install/main/install-wg-easy.sh | bash
+
+
+### 自动获取本机公网 IP 全自动
+```bash
+export WG_HOST=$(curl -s https://ipv4.icanhazip.com | tr -d '\n')
+WG_WEB_PORT=32083 WG_PASSWORD="MyPass123" curl -sL https://raw.githubusercontent.com/xxx/wg-easy-install/main/install-wg-easy.sh | bash
